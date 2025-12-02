@@ -176,6 +176,12 @@ jobs:
             sudo sed -i 's|^REDIS_PORT=.*|REDIS_PORT=6379|' "\$DIFY_DIR/.env" || echo "REDIS_PORT=6379" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
             sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
             
+            # Copiar .env para docker/.env também (Docker Compose pode procurar lá)
+            if [ -f "\$DIFY_DIR/.env" ]; then
+              sudo cp "\$DIFY_DIR/.env" "\$DIFY_DIR/docker/.env" 2>/dev/null || true
+              sudo chown ubuntu:ubuntu "\$DIFY_DIR/docker/.env" 2>/dev/null || true
+            fi
+            
             echo "Arquivo .env atualizado"
           EOF
 
@@ -210,8 +216,16 @@ jobs:
               COMPOSE_CMD="docker compose"
             fi
             
+            # Garantir que o .env está no local correto (docker-compose procura no mesmo diretório do compose file)
+            if [ -f "\$DIFY_DIR/.env" ]; then
+              sudo cp "\$DIFY_DIR/.env" "\$DIFY_DIR/docker/.env" 2>/dev/null || true
+              sudo chown ubuntu:ubuntu "\$DIFY_DIR/docker/.env" 2>/dev/null || true
+            fi
+            
             echo "Fazendo pull das imagens Docker..."
-            sudo \$COMPOSE_CMD -f docker/docker-compose.yaml pull || true
+            # Executar do diretório docker/ para que o .env seja encontrado automaticamente
+            cd "\$DIFY_DIR/docker"
+            sudo \$COMPOSE_CMD -f docker-compose.yaml pull || true
           EOF
 
       - name: Restart Dify Containers
@@ -228,12 +242,20 @@ jobs:
               COMPOSE_CMD="docker compose"
             fi
             
+            # Garantir que o .env está no local correto (docker-compose procura no mesmo diretório do compose file)
+            if [ -f "\$DIFY_DIR/.env" ]; then
+              sudo cp "\$DIFY_DIR/.env" "\$DIFY_DIR/docker/.env" 2>/dev/null || true
+              sudo chown ubuntu:ubuntu "\$DIFY_DIR/docker/.env" 2>/dev/null || true
+            fi
+            
             echo "Reiniciando containers Dify..."
-            sudo \$COMPOSE_CMD -f docker/docker-compose.yaml down || true
-            sudo \$COMPOSE_CMD -f docker/docker-compose.yaml up -d
+            # Executar do diretório docker/ para que o .env seja encontrado automaticamente
+            cd "\$DIFY_DIR/docker"
+            sudo \$COMPOSE_CMD -f docker-compose.yaml down || true
+            sudo \$COMPOSE_CMD -f docker-compose.yaml up -d
             
             echo "Containers reiniciados"
-            sudo \$COMPOSE_CMD -f docker/docker-compose.yaml ps
+            sudo \$COMPOSE_CMD -f docker-compose.yaml ps
           EOF
 
       - name: Health Check
@@ -277,11 +299,12 @@ jobs:
                 COMPOSE_CMD="docker compose"
               fi
               
-              sudo \$COMPOSE_CMD -f docker/docker-compose.yaml down
-              
+              # Garantir que o .env está no local correto
               if [ -f "\$BACKUP_DIR/.env" ]; then
                 sudo cp "\$BACKUP_DIR/.env" "\$DIFY_DIR/.env"
+                sudo cp "\$BACKUP_DIR/.env" "\$DIFY_DIR/docker/.env"
                 sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
+                sudo chown ubuntu:ubuntu "\$DIFY_DIR/docker/.env"
               fi
               
               if [ -f "\$BACKUP_DIR/docker-compose.yaml" ]; then
@@ -289,7 +312,10 @@ jobs:
                 sudo chown ubuntu:ubuntu "\$DIFY_DIR/docker/docker-compose.yaml"
               fi
               
-              sudo \$COMPOSE_CMD -f docker/docker-compose.yaml up -d
+              # Executar do diretório docker/ para que o .env seja encontrado automaticamente
+              cd "\$DIFY_DIR/docker"
+              sudo \$COMPOSE_CMD -f docker-compose.yaml down
+              sudo \$COMPOSE_CMD -f docker-compose.yaml up -d
               echo "Rollback concluído"
             else
               echo "Nenhum backup encontrado para rollback"
