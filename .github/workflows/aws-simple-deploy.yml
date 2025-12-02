@@ -46,16 +46,16 @@ jobs:
 
       - name: Backup Current Configuration
         run: |
-          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
             set -e
-            BACKUP_DIR="/home/ubuntu/dify-backup-$(date +%Y%m%d-%H%M%S)"
-            mkdir -p "$BACKUP_DIR"
+            BACKUP_DIR="/home/ubuntu/dify-backup-\$(date +%Y%m%d-%H%M%S)"
+            mkdir -p "\$BACKUP_DIR"
             
             if [ -d "/opt/dify" ]; then
-              sudo cp -r /opt/dify/.env "$BACKUP_DIR/.env" 2>/dev/null || true
-              sudo cp -r /opt/dify/docker/docker-compose.yaml "$BACKUP_DIR/docker-compose.yaml" 2>/dev/null || true
-              sudo chown -R ubuntu:ubuntu "$BACKUP_DIR"
-              echo "Backup criado em: $BACKUP_DIR"
+              sudo cp -r /opt/dify/.env "\$BACKUP_DIR/.env" 2>/dev/null || true
+              sudo cp -r /opt/dify/docker/docker-compose.yaml "\$BACKUP_DIR/docker-compose.yaml" 2>/dev/null || true
+              sudo chown -R ubuntu:ubuntu "\$BACKUP_DIR"
+              echo "Backup criado em: \$BACKUP_DIR"
             else
               echo "Diretório /opt/dify não existe ainda - primeiro deploy"
             fi
@@ -127,7 +127,7 @@ jobs:
 
       - name: Update Docker Compose
         run: |
-          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
             set -e
             DIFY_DIR="/opt/dify"
             cd "\$DIFY_DIR"
@@ -144,7 +144,7 @@ jobs:
 
       - name: Pull Docker Images
         run: |
-          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
             set -e
             DIFY_DIR="/opt/dify"
             cd "\$DIFY_DIR"
@@ -162,7 +162,7 @@ jobs:
 
       - name: Restart Dify Containers
         run: |
-          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
             set -e
             DIFY_DIR="/opt/dify"
             cd "\$DIFY_DIR"
@@ -208,14 +208,14 @@ jobs:
       - name: Rollback on Failure
         if: failure()
         run: |
-          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
             set -e
             DIFY_DIR="/opt/dify"
-            BACKUP_DIR=$(ls -td /home/ubuntu/dify-backup-* 2>/dev/null | head -1)
+            BACKUP_DIR=\$(ls -td /home/ubuntu/dify-backup-* 2>/dev/null | head -1)
             
-            if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
-              echo "Fazendo rollback usando backup: $BACKUP_DIR"
-              cd "$DIFY_DIR"
+            if [ -n "\$BACKUP_DIR" ] && [ -d "\$BACKUP_DIR" ]; then
+              echo "Fazendo rollback usando backup: \$BACKUP_DIR"
+              cd "\$DIFY_DIR"
               
               if command -v docker-compose &> /dev/null; then
                 COMPOSE_CMD="docker-compose"
@@ -225,14 +225,14 @@ jobs:
               
               sudo \$COMPOSE_CMD -f docker/docker-compose.yaml down
               
-              if [ -f "$BACKUP_DIR/.env" ]; then
-                sudo cp "$BACKUP_DIR/.env" "$DIFY_DIR/.env"
-                sudo chown ubuntu:ubuntu "$DIFY_DIR/.env"
+              if [ -f "\$BACKUP_DIR/.env" ]; then
+                sudo cp "\$BACKUP_DIR/.env" "\$DIFY_DIR/.env"
+                sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
               fi
               
-              if [ -f "$BACKUP_DIR/docker-compose.yaml" ]; then
-                sudo cp "$BACKUP_DIR/docker-compose.yaml" "$DIFY_DIR/docker/docker-compose.yaml"
-                sudo chown ubuntu:ubuntu "$DIFY_DIR/docker/docker-compose.yaml"
+              if [ -f "\$BACKUP_DIR/docker-compose.yaml" ]; then
+                sudo cp "\$BACKUP_DIR/docker-compose.yaml" "\$DIFY_DIR/docker/docker-compose.yaml"
+                sudo chown ubuntu:ubuntu "\$DIFY_DIR/docker/docker-compose.yaml"
               fi
               
               sudo \$COMPOSE_CMD -f docker/docker-compose.yaml up -d
