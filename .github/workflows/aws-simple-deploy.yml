@@ -115,28 +115,26 @@ jobs:
               
               # Extrair componentes da URL do Supabase usando Python
               # Formato: postgresql://user:password@host:port/database
-              # Criar script Python temporário para evitar problemas de parsing YAML
-              cat > /tmp/parse_db_url.py << 'PYTHON_EOF'
-import re
-import sys
-url = sys.stdin.read().strip()
-if url:
-    pattern = r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/([^?]+)'
-    match = re.match(pattern, url)
-    if match:
-        username = match.group(1)
-        password = match.group(2)
-        host = match.group(3)
-        port = match.group(4)
-        database = match.group(5)
-        print(f'DB_USERNAME={username}')
-        print(f'DB_PASSWORD={password}')
-        print(f'DB_HOST={host}')
-        print(f'DB_PORT={port}')
-        print(f'DB_DATABASE={database}')
-    else:
-        print('ERROR: URL format not recognized', file=sys.stderr)
-PYTHON_EOF
+              # Criar script Python temporário usando echo para evitar problemas de parsing YAML
+              echo 'import re' > /tmp/parse_db_url.py
+              echo 'import sys' >> /tmp/parse_db_url.py
+              echo 'url = sys.stdin.read().strip()' >> /tmp/parse_db_url.py
+              echo 'if url:' >> /tmp/parse_db_url.py
+              echo '    pattern = r'"'"'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/([^?]+)'"'"'' >> /tmp/parse_db_url.py
+              echo '    match = re.match(pattern, url)' >> /tmp/parse_db_url.py
+              echo '    if match:' >> /tmp/parse_db_url.py
+              echo '        username = match.group(1)' >> /tmp/parse_db_url.py
+              echo '        password = match.group(2)' >> /tmp/parse_db_url.py
+              echo '        host = match.group(3)' >> /tmp/parse_db_url.py
+              echo '        port = match.group(4)' >> /tmp/parse_db_url.py
+              echo '        database = match.group(5)' >> /tmp/parse_db_url.py
+              echo '        print(f'"'"'DB_USERNAME={username}'"'"')' >> /tmp/parse_db_url.py
+              echo '        print(f'"'"'DB_PASSWORD={password}'"'"')' >> /tmp/parse_db_url.py
+              echo '        print(f'"'"'DB_HOST={host}'"'"')' >> /tmp/parse_db_url.py
+              echo '        print(f'"'"'DB_PORT={port}'"'"')' >> /tmp/parse_db_url.py
+              echo '        print(f'"'"'DB_DATABASE={database}'"'"')' >> /tmp/parse_db_url.py
+              echo '    else:' >> /tmp/parse_db_url.py
+              echo '        print('"'"'ERROR: URL format not recognized'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
               
               # Executar script Python com a URL
               printf '%s' "\$SUPABASE_URL" | python3 /tmp/parse_db_url.py > /tmp/db_vars.txt 2>&1
