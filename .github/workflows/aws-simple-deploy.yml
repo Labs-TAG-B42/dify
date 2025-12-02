@@ -73,6 +73,12 @@ jobs:
               sudo mkdir -p "\$DIFY_DIR"
               sudo git clone https://github.com/langgenius/dify.git "\$DIFY_DIR"
               sudo chown -R ubuntu:ubuntu "\$DIFY_DIR"
+            elif [ ! -d "\$DIFY_DIR/.git" ]; then
+              echo "Diretório existe mas não é um repositório git. Recriando..."
+              sudo rm -rf "\$DIFY_DIR"
+              sudo mkdir -p "\$DIFY_DIR"
+              sudo git clone https://github.com/langgenius/dify.git "\$DIFY_DIR"
+              sudo chown -R ubuntu:ubuntu "\$DIFY_DIR"
             else
               echo "Atualizando repositório Dify..."
               cd "\$DIFY_DIR"
