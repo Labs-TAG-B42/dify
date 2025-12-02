@@ -83,7 +83,6 @@ jobs:
           EOF
 
       - name: Update Environment File
-        if: secrets.SUPABASE_DATABASE_URL != ''
         run: |
           ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
             set -e
@@ -95,12 +94,15 @@ jobs:
             fi
             
             # Atualizar variáveis de ambiente se fornecidas
-            if [ -n "${{ secrets.SUPABASE_DATABASE_URL }}" ]; then
-              sed -i 's|^DATABASE_URL=.*|DATABASE_URL=${{ secrets.SUPABASE_DATABASE_URL }}|' "\$DIFY_DIR/.env" || echo "DATABASE_URL=${{ secrets.SUPABASE_DATABASE_URL }}" >> "\$DIFY_DIR/.env"
+            SUPABASE_URL="${{ secrets.SUPABASE_DATABASE_URL }}"
+            SECRET_KEY="${{ secrets.DIFY_SECRET_KEY }}"
+            
+            if [ -n "\$SUPABASE_URL" ] && [ "\$SUPABASE_URL" != "" ]; then
+              sed -i 's|^DATABASE_URL=.*|DATABASE_URL='"\$SUPABASE_URL"'|' "\$DIFY_DIR/.env" || echo "DATABASE_URL=\$SUPABASE_URL" >> "\$DIFY_DIR/.env"
             fi
             
-            if [ -n "${{ secrets.DIFY_SECRET_KEY }}" ]; then
-              sed -i 's|^SECRET_KEY=.*|SECRET_KEY=${{ secrets.DIFY_SECRET_KEY }}|' "\$DIFY_DIR/.env" || echo "SECRET_KEY=${{ secrets.DIFY_SECRET_KEY }}" >> "\$DIFY_DIR/.env"
+            if [ -n "\$SECRET_KEY" ] && [ "\$SECRET_KEY" != "" ]; then
+              sed -i 's|^SECRET_KEY=.*|SECRET_KEY='"\$SECRET_KEY"'|' "\$DIFY_DIR/.env" || echo "SECRET_KEY=\$SECRET_KEY" >> "\$DIFY_DIR/.env"
             fi
             
             # Configurar Redis local
