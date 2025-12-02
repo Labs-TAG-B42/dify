@@ -108,25 +108,64 @@ jobs:
             SECRET_KEY="${{ secrets.DIFY_SECRET_KEY }}"
             
             if [ -n "\$SUPABASE_URL" ] && [ "\$SUPABASE_URL" != "" ]; then
+              echo "Configurando banco de dados Supabase..."
+              
               # Configurar DATABASE_URL (formato completo)
               sudo sed -i 's|^DATABASE_URL=.*|DATABASE_URL='"\$SUPABASE_URL"'|' "\$DIFY_DIR/.env" || echo "DATABASE_URL=\$SUPABASE_URL" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
               
               # Extrair componentes da URL do Supabase usando Python
               # Formato: postgresql://user:password@host:port/database
-              export SUPABASE_URL="\$SUPABASE_URL"
-              echo 'import re, os; url = os.environ.get("SUPABASE_URL", ""); pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/([^?]+)"; match = re.match(pattern, url) if url else None; [print(f"DB_USERNAME={match.group(1)}"), print(f"DB_PASSWORD={match.group(2)}"), print(f"DB_HOST={match.group(3)}"), print(f"DB_PORT={match.group(4)}"), print(f"DB_DATABASE={match.group(5)}")] if match else None' | python3 > /tmp/db_vars.txt
+              # Criar script Python temporário para evitar problemas de parsing YAML
+              cat > /tmp/parse_db_url.py << 'PYTHON_EOF'
+import re
+import sys
+url = sys.stdin.read().strip()
+if url:
+    pattern = r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/([^?]+)'
+    match = re.match(pattern, url)
+    if match:
+        username = match.group(1)
+        password = match.group(2)
+        host = match.group(3)
+        port = match.group(4)
+        database = match.group(5)
+        print(f'DB_USERNAME={username}')
+        print(f'DB_PASSWORD={password}')
+        print(f'DB_HOST={host}')
+        print(f'DB_PORT={port}')
+        print(f'DB_DATABASE={database}')
+    else:
+        print('ERROR: URL format not recognized', file=sys.stderr)
+PYTHON_EOF
               
-              # Configurar variáveis do arquivo temporário
-              if [ -f /tmp/db_vars.txt ]; then
+              # Executar script Python com a URL
+              printf '%s' "\$SUPABASE_URL" | python3 /tmp/parse_db_url.py > /tmp/db_vars.txt 2>&1
+              rm -f /tmp/parse_db_url.py
+              
+              # Verificar se o arquivo foi criado e tem conteúdo
+              if [ -f /tmp/db_vars.txt ] && [ -s /tmp/db_vars.txt ] && ! grep -q "ERROR" /tmp/db_vars.txt; then
+                echo "Variáveis extraídas do banco de dados:"
+                cat /tmp/db_vars.txt
+                
+                # Configurar variáveis do arquivo temporário
                 while IFS='=' read -r KEY VALUE; do
                   if [ -n "\$KEY" ] && [ -n "\$VALUE" ]; then
-                    sudo sed -i "s|^\${KEY}=.*|\${KEY}=\${VALUE}|" "\$DIFY_DIR/.env" || echo "\${KEY}=\${VALUE}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+                    # Escapar caracteres especiais na senha para sed
+                    ESCAPED_VALUE=\$(printf '%s' "\$VALUE" | sed 's/[[\.*^$()+?{|]/\\&/g')
+                    sudo sed -i "s|^\${KEY}=.*|\${KEY}=\${ESCAPED_VALUE}|" "\$DIFY_DIR/.env" || echo "\${KEY}=\${VALUE}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+                    echo "Configurado: \${KEY}"
                   fi
                 done < /tmp/db_vars.txt
+                rm -f /tmp/db_vars.txt
+              else
+                echo "ERRO: Não foi possível extrair variáveis da URL do banco de dados"
+                cat /tmp/db_vars.txt 2>&1 || true
                 rm -f /tmp/db_vars.txt
               fi
               
               sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
+            else
+              echo "AVISO: SUPABASE_DATABASE_URL não foi fornecido"
             fi
             
             if [ -n "\$SECRET_KEY" ] && [ "\$SECRET_KEY" != "" ]; then
