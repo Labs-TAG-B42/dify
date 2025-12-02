@@ -108,7 +108,24 @@ jobs:
             SECRET_KEY="${{ secrets.DIFY_SECRET_KEY }}"
             
             if [ -n "\$SUPABASE_URL" ] && [ "\$SUPABASE_URL" != "" ]; then
+              # Configurar DATABASE_URL (formato completo)
               sudo sed -i 's|^DATABASE_URL=.*|DATABASE_URL='"\$SUPABASE_URL"'|' "\$DIFY_DIR/.env" || echo "DATABASE_URL=\$SUPABASE_URL" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              
+              # Extrair componentes da URL do Supabase usando Python
+              # Formato: postgresql://user:password@host:port/database
+              export SUPABASE_URL="\$SUPABASE_URL"
+              echo 'import re, os; url = os.environ.get("SUPABASE_URL", ""); pattern = r"postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/([^?]+)"; match = re.match(pattern, url) if url else None; [print(f"DB_USERNAME={match.group(1)}"), print(f"DB_PASSWORD={match.group(2)}"), print(f"DB_HOST={match.group(3)}"), print(f"DB_PORT={match.group(4)}"), print(f"DB_DATABASE={match.group(5)}")] if match else None' | python3 > /tmp/db_vars.txt
+              
+              # Configurar variáveis do arquivo temporário
+              if [ -f /tmp/db_vars.txt ]; then
+                while IFS='=' read -r KEY VALUE; do
+                  if [ -n "\$KEY" ] && [ -n "\$VALUE" ]; then
+                    sudo sed -i "s|^\${KEY}=.*|\${KEY}=\${VALUE}|" "\$DIFY_DIR/.env" || echo "\${KEY}=\${VALUE}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+                  fi
+                done < /tmp/db_vars.txt
+                rm -f /tmp/db_vars.txt
+              fi
+              
               sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
             fi
             
