@@ -109,12 +109,18 @@ jobs:
             
             if [ -n "\$SUPABASE_URL" ] && [ "\$SUPABASE_URL" != "" ]; then
               echo "Configurando banco de dados Supabase..."
+              echo "NOTA: Usando Session Pooler (porta 6543) para suporte IPv4"
               
-              # Configurar DATABASE_URL (formato completo)
-              sudo sed -i 's|^DATABASE_URL=.*|DATABASE_URL='"\$SUPABASE_URL"'|' "\$DIFY_DIR/.env" || echo "DATABASE_URL=\$SUPABASE_URL" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              # Converter porta 5432 para 6543 (Session Pooler) na URL original
+              SUPABASE_URL_POOLER=\$(echo "\$SUPABASE_URL" | sed 's|:5432/|:6543/|')
+              
+              # Configurar DATABASE_URL (será atualizado pelo script Python para usar pooler)
+              # Por enquanto, usar a URL com pooler
+              sudo sed -i 's|^DATABASE_URL=.*|DATABASE_URL='"\$SUPABASE_URL_POOLER"'|' "\$DIFY_DIR/.env" || echo "DATABASE_URL=\$SUPABASE_URL_POOLER" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
               
               # Extrair componentes da URL do Supabase usando Python
               # Formato: postgresql://user:password@host:port/database
+              # IMPORTANTE: Usar Session Pooler (porta 6543) para suporte IPv4
               # Criar script Python temporário usando echo para evitar problemas de parsing YAML
               echo 'import re' > /tmp/parse_db_url.py
               echo 'import sys' >> /tmp/parse_db_url.py
@@ -128,11 +134,18 @@ jobs:
               echo '        host = match.group(3)' >> /tmp/parse_db_url.py
               echo '        port = match.group(4)' >> /tmp/parse_db_url.py
               echo '        database = match.group(5)' >> /tmp/parse_db_url.py
+              echo '        # Usar Session Pooler (porta 6543) para suporte IPv4' >> /tmp/parse_db_url.py
+              echo '        # Se a porta for 5432, mudar para 6543 (Session Pooler)' >> /tmp/parse_db_url.py
+              echo '        if port == "5432":' >> /tmp/parse_db_url.py
+              echo '            port = "6543"' >> /tmp/parse_db_url.py
+              echo '            print("INFO: Usando Session Pooler (porta 6543) para suporte IPv4", file=sys.stderr)' >> /tmp/parse_db_url.py
               echo '        print(f'"'"'DB_USERNAME={username}'"'"')' >> /tmp/parse_db_url.py
               echo '        print(f'"'"'DB_PASSWORD={password}'"'"')' >> /tmp/parse_db_url.py
               echo '        print(f'"'"'DB_HOST={host}'"'"')' >> /tmp/parse_db_url.py
               echo '        print(f'"'"'DB_PORT={port}'"'"')' >> /tmp/parse_db_url.py
               echo '        print(f'"'"'DB_DATABASE={database}'"'"')' >> /tmp/parse_db_url.py
+              echo '        # Atualizar DATABASE_URL para usar Session Pooler' >> /tmp/parse_db_url.py
+              echo '        print(f'"'"'DATABASE_URL=postgresql://{username}:{password}@{host}:{port}/{database}'"'"')' >> /tmp/parse_db_url.py
               echo '    else:' >> /tmp/parse_db_url.py
               echo '        print('"'"'ERROR: URL format not recognized'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
               
@@ -161,13 +174,19 @@ jobs:
                     # Escapar caracteres especiais na senha para sed
                     ESCAPED_VALUE=\$(printf '%s' "\$VALUE" | sed 's/[[\.*^$()+?{|]/\\&/g')
                     
-                    # Tentar substituir primeiro, se não existir, adicionar
-                    if grep -q "^\${KEY}=" "\$DIFY_DIR/.env" 2>/dev/null; then
-                      sudo sed -i "s|^\${KEY}=.*|\${KEY}=\${ESCAPED_VALUE}|" "\$DIFY_DIR/.env"
-                      echo "Atualizado: \${KEY}"
+                    # Se for DATABASE_URL, usar o valor diretamente (já vem com pooler do Python)
+                    if [ "\$KEY" = "DATABASE_URL" ]; then
+                      sudo sed -i "s|^\${KEY}=.*|\${KEY}=\${ESCAPED_VALUE}|" "\$DIFY_DIR/.env" || echo "\${KEY}=\${VALUE}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+                      echo "Atualizado: \${KEY} (com Session Pooler)"
                     else
-                      echo "\${KEY}=\${VALUE}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
-                      echo "Adicionado: \${KEY}"
+                      # Tentar substituir primeiro, se não existir, adicionar
+                      if grep -q "^\${KEY}=" "\$DIFY_DIR/.env" 2>/dev/null; then
+                        sudo sed -i "s|^\${KEY}=.*|\${KEY}=\${ESCAPED_VALUE}|" "\$DIFY_DIR/.env"
+                        echo "Atualizado: \${KEY}"
+                      else
+                        echo "\${KEY}=\${VALUE}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+                        echo "Adicionado: \${KEY}"
+                      fi
                     fi
                   else
                     echo "AVISO: Linha inválida ignorada: KEY=\${KEY}, VALUE=\${VALUE}"
