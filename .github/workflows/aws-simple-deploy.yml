@@ -1,0 +1,226 @@
+name: Dify Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - '.github/workflows/dify-deploy.yml'
+      - 'scripts/**'
+  workflow_dispatch:
+    inputs:
+      dify_version:
+        description: 'Versão do Dify (tag ou branch)'
+        required: false
+        default: 'main'
+  schedule:
+    # Executar toda segunda-feira às 2h UTC (opcional - para atualizações automáticas)
+    - cron: '0 2 * * 1'
+
+env:
+  HEALTH_CHECK_TIMEOUT: 300
+  HEALTH_CHECK_INTERVAL: 10
+
+jobs:
+  deploy:
+    name: Deploy Dify to EC2
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Test SSH Connection
+        run: |
+          ssh -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} "echo 'SSH connection successful'"
+
+      - name: Backup Current Configuration
+        run: |
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+            set -e
+            BACKUP_DIR="/opt/dify-backup-$(date +%Y%m%d-%H%M%S)"
+            mkdir -p "$BACKUP_DIR"
+            
+            if [ -d "/opt/dify" ]; then
+              cp -r /opt/dify/.env "$BACKUP_DIR/.env" 2>/dev/null || true
+              cp -r /opt/dify/docker-compose.yml "$BACKUP_DIR/docker-compose.yml" 2>/dev/null || true
+              echo "Backup criado em: $BACKUP_DIR"
+            else
+              echo "Diretório /opt/dify não existe ainda - primeiro deploy"
+            fi
+          EOF
+
+      - name: Clone/Update Dify Repository
+        run: |
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
+            set -e
+            DIFY_DIR="/opt/dify"
+            DIFY_VERSION="${{ github.event.inputs.dify_version || 'main' }}"
+            
+            if [ ! -d "\$DIFY_DIR" ]; then
+              echo "Clonando repositório Dify..."
+              git clone https://github.com/langgenius/dify.git "\$DIFY_DIR"
+            else
+              echo "Atualizando repositório Dify..."
+              cd "\$DIFY_DIR"
+              git fetch origin
+              git checkout "\$DIFY_VERSION" || git checkout main
+              git pull origin "\$DIFY_VERSION" || git pull origin main
+            fi
+            
+            cd "\$DIFY_DIR"
+            echo "Versão atual: \$(git rev-parse --short HEAD)"
+          EOF
+
+      - name: Update Environment File
+        if: secrets.SUPABASE_DATABASE_URL != ''
+        run: |
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << EOF
+            set -e
+            DIFY_DIR="/opt/dify"
+            
+            if [ ! -f "\$DIFY_DIR/.env" ]; then
+              echo "Criando arquivo .env..."
+              cp "\$DIFY_DIR/.env.example" "\$DIFY_DIR/.env" 2>/dev/null || touch "\$DIFY_DIR/.env"
+            fi
+            
+            # Atualizar variáveis de ambiente se fornecidas
+            if [ -n "${{ secrets.SUPABASE_DATABASE_URL }}" ]; then
+              sed -i 's|^DATABASE_URL=.*|DATABASE_URL=${{ secrets.SUPABASE_DATABASE_URL }}|' "\$DIFY_DIR/.env" || echo "DATABASE_URL=${{ secrets.SUPABASE_DATABASE_URL }}" >> "\$DIFY_DIR/.env"
+            fi
+            
+            if [ -n "${{ secrets.DIFY_SECRET_KEY }}" ]; then
+              sed -i 's|^SECRET_KEY=.*|SECRET_KEY=${{ secrets.DIFY_SECRET_KEY }}|' "\$DIFY_DIR/.env" || echo "SECRET_KEY=${{ secrets.DIFY_SECRET_KEY }}" >> "\$DIFY_DIR/.env"
+            fi
+            
+            # Configurar Redis local
+            sed -i 's|^REDIS_HOST=.*|REDIS_HOST=localhost|' "\$DIFY_DIR/.env" || echo "REDIS_HOST=localhost" >> "\$DIFY_DIR/.env"
+            sed -i 's|^REDIS_PORT=.*|REDIS_PORT=6379|' "\$DIFY_DIR/.env" || echo "REDIS_PORT=6379" >> "\$DIFY_DIR/.env"
+            
+            echo "Arquivo .env atualizado"
+          EOF
+
+      - name: Update Docker Compose
+        run: |
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+            set -e
+            DIFY_DIR="/opt/dify"
+            cd "\$DIFY_DIR"
+            
+            # Comentar serviço PostgreSQL se existir (usando Supabase externo)
+            if [ -f "docker/docker-compose.yaml" ]; then
+              sed -i 's/^[[:space:]]*postgresql:/# postgresql:/' docker/docker-compose.yaml || true
+              sed -i '/^[[:space:]]*postgresql:/,/^[[:space:]]*[a-z]/ { /^[[:space:]]*[a-z]/! s/^/# / }' docker/docker-compose.yaml || true
+            fi
+            
+            echo "Docker Compose atualizado"
+          EOF
+
+      - name: Pull Docker Images
+        run: |
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+            set -e
+            DIFY_DIR="/opt/dify"
+            cd "\$DIFY_DIR"
+            
+            # Usar docker-compose ou docker compose dependendo da versão
+            if command -v docker-compose &> /dev/null; then
+              COMPOSE_CMD="docker-compose"
+            else
+              COMPOSE_CMD="docker compose"
+            fi
+            
+            echo "Fazendo pull das imagens Docker..."
+            \$COMPOSE_CMD -f docker/docker-compose.yaml pull || true
+          EOF
+
+      - name: Restart Dify Containers
+        run: |
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+            set -e
+            DIFY_DIR="/opt/dify"
+            cd "\$DIFY_DIR"
+            
+            # Usar docker-compose ou docker compose dependendo da versão
+            if command -v docker-compose &> /dev/null; then
+              COMPOSE_CMD="docker-compose"
+            else
+              COMPOSE_CMD="docker compose"
+            fi
+            
+            echo "Reiniciando containers Dify..."
+            \$COMPOSE_CMD -f docker/docker-compose.yaml down || true
+            \$COMPOSE_CMD -f docker/docker-compose.yaml up -d
+            
+            echo "Containers reiniciados"
+            \$COMPOSE_CMD -f docker/docker-compose.yaml ps
+          EOF
+
+      - name: Health Check
+        run: |
+          HEALTH_URL="${{ secrets.HEALTH_CHECK_URL || format('http://{0}', secrets.EC2_HOST) }}"
+          TIMEOUT=${{ env.HEALTH_CHECK_TIMEOUT }}
+          INTERVAL=${{ env.HEALTH_CHECK_INTERVAL }}
+          ELAPSED=0
+          
+          echo "Aguardando Dify ficar disponível em $HEALTH_URL..."
+          
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            if curl -f -s "$HEALTH_URL" > /dev/null 2>&1 || curl -f -s "$HEALTH_URL/health" > /dev/null 2>&1; then
+              echo "✅ Dify está respondendo!"
+              exit 0
+            fi
+            
+            echo "Aguardando... ($ELAPSED/$TIMEOUT segundos)"
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+          
+          echo "❌ Timeout: Dify não respondeu após $TIMEOUT segundos"
+          exit 1
+
+      - name: Rollback on Failure
+        if: failure()
+        run: |
+          ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+            set -e
+            DIFY_DIR="/opt/dify"
+            BACKUP_DIR=$(ls -td /opt/dify-backup-* 2>/dev/null | head -1)
+            
+            if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
+              echo "Fazendo rollback usando backup: $BACKUP_DIR"
+              cd "$DIFY_DIR"
+              
+              if command -v docker-compose &> /dev/null; then
+                COMPOSE_CMD="docker-compose"
+              else
+                COMPOSE_CMD="docker compose"
+              fi
+              
+              \$COMPOSE_CMD -f docker/docker-compose.yaml down
+              
+              if [ -f "$BACKUP_DIR/.env" ]; then
+                cp "$BACKUP_DIR/.env" "$DIFY_DIR/.env"
+              fi
+              
+              if [ -f "$BACKUP_DIR/docker-compose.yml" ]; then
+                cp "$BACKUP_DIR/docker-compose.yml" "$DIFY_DIR/docker-compose.yml"
+              fi
+              
+              \$COMPOSE_CMD -f docker/docker-compose.yaml up -d
+              echo "Rollback concluído"
+            else
+              echo "Nenhum backup encontrado para rollback"
+            fi
+          EOF
+
