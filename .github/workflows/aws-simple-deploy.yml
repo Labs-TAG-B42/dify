@@ -48,12 +48,13 @@ jobs:
         run: |
           ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
             set -e
-            BACKUP_DIR="/opt/dify-backup-$(date +%Y%m%d-%H%M%S)"
+            BACKUP_DIR="/home/ubuntu/dify-backup-$(date +%Y%m%d-%H%M%S)"
             mkdir -p "$BACKUP_DIR"
             
             if [ -d "/opt/dify" ]; then
-              cp -r /opt/dify/.env "$BACKUP_DIR/.env" 2>/dev/null || true
-              cp -r /opt/dify/docker-compose.yml "$BACKUP_DIR/docker-compose.yml" 2>/dev/null || true
+              sudo cp -r /opt/dify/.env "$BACKUP_DIR/.env" 2>/dev/null || true
+              sudo cp -r /opt/dify/docker/docker-compose.yaml "$BACKUP_DIR/docker-compose.yaml" 2>/dev/null || true
+              sudo chown -R ubuntu:ubuntu "$BACKUP_DIR"
               echo "Backup criado em: $BACKUP_DIR"
             else
               echo "Diretório /opt/dify não existe ainda - primeiro deploy"
@@ -69,17 +70,19 @@ jobs:
             
             if [ ! -d "\$DIFY_DIR" ]; then
               echo "Clonando repositório Dify..."
-              git clone https://github.com/langgenius/dify.git "\$DIFY_DIR"
+              sudo mkdir -p "\$DIFY_DIR"
+              sudo git clone https://github.com/langgenius/dify.git "\$DIFY_DIR"
+              sudo chown -R ubuntu:ubuntu "\$DIFY_DIR"
             else
               echo "Atualizando repositório Dify..."
               cd "\$DIFY_DIR"
-              git fetch origin
-              git checkout "\$DIFY_VERSION" || git checkout main
-              git pull origin "\$DIFY_VERSION" || git pull origin main
+              sudo -u ubuntu git fetch origin
+              sudo -u ubuntu git checkout "\$DIFY_VERSION" || sudo -u ubuntu git checkout main
+              sudo -u ubuntu git pull origin "\$DIFY_VERSION" || sudo -u ubuntu git pull origin main
             fi
             
             cd "\$DIFY_DIR"
-            echo "Versão atual: \$(git rev-parse --short HEAD)"
+            echo "Versão atual: \$(sudo -u ubuntu git rev-parse --short HEAD)"
           EOF
 
       - name: Update Environment File
@@ -90,7 +93,8 @@ jobs:
             
             if [ ! -f "\$DIFY_DIR/.env" ]; then
               echo "Criando arquivo .env..."
-              cp "\$DIFY_DIR/.env.example" "\$DIFY_DIR/.env" 2>/dev/null || touch "\$DIFY_DIR/.env"
+              sudo cp "\$DIFY_DIR/.env.example" "\$DIFY_DIR/.env" 2>/dev/null || sudo touch "\$DIFY_DIR/.env"
+              sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
             fi
             
             # Atualizar variáveis de ambiente se fornecidas
@@ -98,16 +102,19 @@ jobs:
             SECRET_KEY="${{ secrets.DIFY_SECRET_KEY }}"
             
             if [ -n "\$SUPABASE_URL" ] && [ "\$SUPABASE_URL" != "" ]; then
-              sed -i 's|^DATABASE_URL=.*|DATABASE_URL='"\$SUPABASE_URL"'|' "\$DIFY_DIR/.env" || echo "DATABASE_URL=\$SUPABASE_URL" >> "\$DIFY_DIR/.env"
+              sudo sed -i 's|^DATABASE_URL=.*|DATABASE_URL='"\$SUPABASE_URL"'|' "\$DIFY_DIR/.env" || echo "DATABASE_URL=\$SUPABASE_URL" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
             fi
             
             if [ -n "\$SECRET_KEY" ] && [ "\$SECRET_KEY" != "" ]; then
-              sed -i 's|^SECRET_KEY=.*|SECRET_KEY='"\$SECRET_KEY"'|' "\$DIFY_DIR/.env" || echo "SECRET_KEY=\$SECRET_KEY" >> "\$DIFY_DIR/.env"
+              sudo sed -i 's|^SECRET_KEY=.*|SECRET_KEY='"\$SECRET_KEY"'|' "\$DIFY_DIR/.env" || echo "SECRET_KEY=\$SECRET_KEY" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
             fi
             
             # Configurar Redis local
-            sed -i 's|^REDIS_HOST=.*|REDIS_HOST=localhost|' "\$DIFY_DIR/.env" || echo "REDIS_HOST=localhost" >> "\$DIFY_DIR/.env"
-            sed -i 's|^REDIS_PORT=.*|REDIS_PORT=6379|' "\$DIFY_DIR/.env" || echo "REDIS_PORT=6379" >> "\$DIFY_DIR/.env"
+            sudo sed -i 's|^REDIS_HOST=.*|REDIS_HOST=localhost|' "\$DIFY_DIR/.env" || echo "REDIS_HOST=localhost" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+            sudo sed -i 's|^REDIS_PORT=.*|REDIS_PORT=6379|' "\$DIFY_DIR/.env" || echo "REDIS_PORT=6379" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+            sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
             
             echo "Arquivo .env atualizado"
           EOF
@@ -121,8 +128,9 @@ jobs:
             
             # Comentar serviço PostgreSQL se existir (usando Supabase externo)
             if [ -f "docker/docker-compose.yaml" ]; then
-              sed -i 's/^[[:space:]]*postgresql:/# postgresql:/' docker/docker-compose.yaml || true
-              sed -i '/^[[:space:]]*postgresql:/,/^[[:space:]]*[a-z]/ { /^[[:space:]]*[a-z]/! s/^/# / }' docker/docker-compose.yaml || true
+              sudo sed -i 's/^[[:space:]]*postgresql:/# postgresql:/' docker/docker-compose.yaml || true
+              sudo sed -i '/^[[:space:]]*postgresql:/,/^[[:space:]]*[a-z]/ { /^[[:space:]]*[a-z]/! s/^/# / }' docker/docker-compose.yaml || true
+              sudo chown ubuntu:ubuntu docker/docker-compose.yaml
             fi
             
             echo "Docker Compose atualizado"
@@ -143,7 +151,7 @@ jobs:
             fi
             
             echo "Fazendo pull das imagens Docker..."
-            \$COMPOSE_CMD -f docker/docker-compose.yaml pull || true
+            sudo \$COMPOSE_CMD -f docker/docker-compose.yaml pull || true
           EOF
 
       - name: Restart Dify Containers
@@ -161,11 +169,11 @@ jobs:
             fi
             
             echo "Reiniciando containers Dify..."
-            \$COMPOSE_CMD -f docker/docker-compose.yaml down || true
-            \$COMPOSE_CMD -f docker/docker-compose.yaml up -d
+            sudo \$COMPOSE_CMD -f docker/docker-compose.yaml down || true
+            sudo \$COMPOSE_CMD -f docker/docker-compose.yaml up -d
             
             echo "Containers reiniciados"
-            \$COMPOSE_CMD -f docker/docker-compose.yaml ps
+            sudo \$COMPOSE_CMD -f docker/docker-compose.yaml ps
           EOF
 
       - name: Health Check
@@ -197,7 +205,7 @@ jobs:
           ssh -i ~/.ssh/ec2_key ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
             set -e
             DIFY_DIR="/opt/dify"
-            BACKUP_DIR=$(ls -td /opt/dify-backup-* 2>/dev/null | head -1)
+            BACKUP_DIR=$(ls -td /home/ubuntu/dify-backup-* 2>/dev/null | head -1)
             
             if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
               echo "Fazendo rollback usando backup: $BACKUP_DIR"
@@ -209,17 +217,19 @@ jobs:
                 COMPOSE_CMD="docker compose"
               fi
               
-              \$COMPOSE_CMD -f docker/docker-compose.yaml down
+              sudo \$COMPOSE_CMD -f docker/docker-compose.yaml down
               
               if [ -f "$BACKUP_DIR/.env" ]; then
-                cp "$BACKUP_DIR/.env" "$DIFY_DIR/.env"
+                sudo cp "$BACKUP_DIR/.env" "$DIFY_DIR/.env"
+                sudo chown ubuntu:ubuntu "$DIFY_DIR/.env"
               fi
               
-              if [ -f "$BACKUP_DIR/docker-compose.yml" ]; then
-                cp "$BACKUP_DIR/docker-compose.yml" "$DIFY_DIR/docker-compose.yml"
+              if [ -f "$BACKUP_DIR/docker-compose.yaml" ]; then
+                sudo cp "$BACKUP_DIR/docker-compose.yaml" "$DIFY_DIR/docker/docker-compose.yaml"
+                sudo chown ubuntu:ubuntu "$DIFY_DIR/docker/docker-compose.yaml"
               fi
               
-              \$COMPOSE_CMD -f docker/docker-compose.yaml up -d
+              sudo \$COMPOSE_CMD -f docker/docker-compose.yaml up -d
               echo "Rollback concluído"
             else
               echo "Nenhum backup encontrado para rollback"
