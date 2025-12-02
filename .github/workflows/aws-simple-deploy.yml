@@ -144,20 +144,45 @@ jobs:
               if [ -f /tmp/db_vars.txt ] && [ -s /tmp/db_vars.txt ] && ! grep -q "ERROR" /tmp/db_vars.txt; then
                 echo "Variáveis extraídas do banco de dados:"
                 cat /tmp/db_vars.txt
+                echo ""
                 
                 # Configurar variáveis do arquivo temporário
+                echo "Configurando variáveis no arquivo .env..."
                 while IFS='=' read -r KEY VALUE; do
+                  # Pular linhas vazias ou comentários
+                  [ -z "\$KEY" ] && continue
+                  [ "\${KEY#\#}" != "\$KEY" ] && continue
+                  
                   if [ -n "\$KEY" ] && [ -n "\$VALUE" ]; then
+                    # Remover espaços em branco
+                    KEY=\$(echo "\$KEY" | xargs)
+                    VALUE=\$(echo "\$VALUE" | xargs)
+                    
                     # Escapar caracteres especiais na senha para sed
                     ESCAPED_VALUE=\$(printf '%s' "\$VALUE" | sed 's/[[\.*^$()+?{|]/\\&/g')
-                    sudo sed -i "s|^\${KEY}=.*|\${KEY}=\${ESCAPED_VALUE}|" "\$DIFY_DIR/.env" || echo "\${KEY}=\${VALUE}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
-                    echo "Configurado: \${KEY}"
+                    
+                    # Tentar substituir primeiro, se não existir, adicionar
+                    if grep -q "^\${KEY}=" "\$DIFY_DIR/.env" 2>/dev/null; then
+                      sudo sed -i "s|^\${KEY}=.*|\${KEY}=\${ESCAPED_VALUE}|" "\$DIFY_DIR/.env"
+                      echo "Atualizado: \${KEY}"
+                    else
+                      echo "\${KEY}=\${VALUE}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+                      echo "Adicionado: \${KEY}"
+                    fi
+                  else
+                    echo "AVISO: Linha inválida ignorada: KEY=\${KEY}, VALUE=\${VALUE}"
                   fi
                 done < /tmp/db_vars.txt
+                
+                echo ""
+                echo "Verificando variáveis DB_* no arquivo .env após configuração:"
+                sudo grep "^DB_" "\$DIFY_DIR/.env" | sed 's/\(DB_PASSWORD=\).*/\1***MASKED***/' || echo "ERRO: Nenhuma variável DB_* encontrada!"
+                
                 rm -f /tmp/db_vars.txt
               else
                 echo "ERRO: Não foi possível extrair variáveis da URL do banco de dados"
-                cat /tmp/db_vars.txt 2>&1 || true
+                echo "Conteúdo do arquivo temporário:"
+                cat /tmp/db_vars.txt 2>&1 || echo "Arquivo não existe ou está vazio"
                 rm -f /tmp/db_vars.txt
               fi
               
@@ -250,36 +275,56 @@ jobs:
             
             echo "Reiniciando containers Dify..."
             
-            # Verificar se o .env existe e mostrar conteúdo (sem senha)
-            echo "Verificando arquivo .env..."
+            # Verificar se o .env existe e mostrar conteúdo
+            echo "=== Verificando arquivo .env em \$DIFY_DIR/.env ==="
             if [ -f "\$DIFY_DIR/.env" ]; then
-              echo "Arquivo .env encontrado em \$DIFY_DIR/.env"
-              echo "Conteúdo (sem senha):"
-              grep -v "PASSWORD" "\$DIFY_DIR/.env" || true
+              echo "Arquivo .env encontrado. Tamanho: \$(wc -l < "\$DIFY_DIR/.env") linhas"
+              echo "Conteúdo completo (mascarando senha):"
+              sed 's/\(DB_PASSWORD=\).*/\1***MASKED***/' "\$DIFY_DIR/.env" | head -50
+              echo ""
+              echo "Verificando variáveis DB_* específicas:"
+              grep "^DB_" "\$DIFY_DIR/.env" | sed 's/\(DB_PASSWORD=\).*/\1***MASKED***/' || echo "Nenhuma variável DB_* encontrada no arquivo!"
             else
               echo "ERRO: Arquivo .env não encontrado em \$DIFY_DIR/.env"
             fi
             
             # Garantir que o .env está em docker/ também
             if [ -f "\$DIFY_DIR/.env" ]; then
-              sudo cp "\$DIFY_DIR/.env" "\$DIFY_DIR/docker/.env" 2>/dev/null || true
-              sudo chown ubuntu:ubuntu "\$DIFY_DIR/docker/.env" 2>/dev/null || true
+              echo "Copiando .env para docker/.env..."
+              sudo cp "\$DIFY_DIR/.env" "\$DIFY_DIR/docker/.env"
+              sudo chown ubuntu:ubuntu "\$DIFY_DIR/docker/.env"
+              echo "Arquivo copiado. Verificando docker/.env:"
+              if [ -f "\$DIFY_DIR/docker/.env" ]; then
+                echo "docker/.env existe. Tamanho: \$(wc -l < "\$DIFY_DIR/docker/.env") linhas"
+                grep "^DB_" "\$DIFY_DIR/docker/.env" | sed 's/\(DB_PASSWORD=\).*/\1***MASKED***/' || echo "Nenhuma variável DB_* em docker/.env!"
+              fi
             fi
             
             # Executar do diretório docker/ e carregar o .env explicitamente
             cd "\$DIFY_DIR/docker"
             
-            # Carregar variáveis do .env usando source (mais robusto que export com xargs)
-            # Isso garante que as variáveis estejam disponíveis para o Docker Compose
+            # Verificar o arquivo .env antes de carregar
+            echo "=== Verificando .env no diretório docker/ ==="
             if [ -f .env ]; then
+              echo "Arquivo .env encontrado em docker/.env"
+              echo "Primeiras 20 linhas:"
+              head -20 .env | sed 's/\(DB_PASSWORD=\).*/\1***MASKED***/'
+              echo ""
+              echo "Variáveis DB_* no arquivo:"
+              grep "^DB_" .env | sed 's/\(DB_PASSWORD=\).*/\1***MASKED***/' || echo "ERRO: Nenhuma variável DB_* encontrada!"
+              
+              # Carregar variáveis do .env usando source
               echo "Carregando variáveis do arquivo .env..."
               set -a
               source .env
               set +a
+              
               echo "Variáveis de ambiente exportadas (verificando DB_*):"
-              env | grep "^DB_" || echo "Nenhuma variável DB_* encontrada"
+              env | grep "^DB_" | sed 's/\(DB_PASSWORD=\).*/\1***MASKED***/' || echo "ERRO: Nenhuma variável DB_* encontrada no ambiente!"
             else
-              echo "AVISO: Arquivo .env não encontrado em docker/.env"
+              echo "ERRO: Arquivo .env não encontrado em docker/.env"
+              echo "Listando arquivos em docker/:"
+              ls -la | head -10
             fi
             
             # Executar docker compose com as variáveis exportadas
