@@ -131,32 +131,34 @@ jobs:
               echo "DATABASE_URL=\$DATABASE_URL" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
               
               # Extrair componentes da URL para variáveis individuais
-              # Usar método mais robusto que lida com caracteres especiais na senha
+              # Usar regex manual porque urlparse não lida bem com caracteres especiais na senha (#, (, ), etc.)
               echo 'import re' > /tmp/parse_db_url.py
               echo 'import sys' >> /tmp/parse_db_url.py
               echo 'import urllib.parse' >> /tmp/parse_db_url.py
               echo 'url = sys.stdin.read().strip()' >> /tmp/parse_db_url.py
               echo 'if url:' >> /tmp/parse_db_url.py
               echo '    try:' >> /tmp/parse_db_url.py
-              echo '        # Usar urlparse que lida melhor com caracteres especiais' >> /tmp/parse_db_url.py
-              echo '        parsed = urllib.parse.urlparse(url)' >> /tmp/parse_db_url.py
-              echo '        username = urllib.parse.unquote(parsed.username or "")' >> /tmp/parse_db_url.py
-              echo '        password = urllib.parse.unquote(parsed.password or "")' >> /tmp/parse_db_url.py
-              echo '        host = parsed.hostname or ""' >> /tmp/parse_db_url.py
-              echo '        port = str(parsed.port) if parsed.port else "5432"' >> /tmp/parse_db_url.py
-              echo '        database = parsed.path.lstrip("/").split("?")[0].split("#")[0] if parsed.path else ""' >> /tmp/parse_db_url.py
-              echo '        # Debug: mostrar o que foi extraído' >> /tmp/parse_db_url.py
-              echo '        print(f'"'"'DEBUG: parsed.scheme={parsed.scheme}, parsed.netloc={parsed.netloc}, parsed.path={parsed.path}'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
-              echo '        print(f'"'"'DEBUG: username={username}, host={host}, database={database}, port={port}'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
-              echo '        if username and host and database:' >> /tmp/parse_db_url.py
+              echo '        # Remover o scheme (postgresql://) primeiro' >> /tmp/parse_db_url.py
+              echo '        if "://" in url:' >> /tmp/parse_db_url.py
+              echo '            url = url.split("://", 1)[1]' >> /tmp/parse_db_url.py
+              echo '        # Regex para capturar: username:password@host:port/database' >> /tmp/parse_db_url.py
+              echo '        # A senha pode conter qualquer caractere, então capturamos tudo até @' >> /tmp/parse_db_url.py
+              echo '        pattern = r'"'"'^([^:]+):([^@]+)@([^:]+):(\d+)/([^?#]+)'"'"'' >> /tmp/parse_db_url.py
+              echo '        match = re.match(pattern, url)' >> /tmp/parse_db_url.py
+              echo '        if match:' >> /tmp/parse_db_url.py
+              echo '            username = urllib.parse.unquote(match.group(1))' >> /tmp/parse_db_url.py
+              echo '            password = urllib.parse.unquote(match.group(2))' >> /tmp/parse_db_url.py
+              echo '            host = match.group(3)' >> /tmp/parse_db_url.py
+              echo '            port = match.group(4)' >> /tmp/parse_db_url.py
+              echo '            database = match.group(5)' >> /tmp/parse_db_url.py
               echo '            print(f'"'"'DB_USERNAME={username}'"'"')' >> /tmp/parse_db_url.py
               echo '            print(f'"'"'DB_PASSWORD={password}'"'"')' >> /tmp/parse_db_url.py
               echo '            print(f'"'"'DB_HOST={host}'"'"')' >> /tmp/parse_db_url.py
               echo '            print(f'"'"'DB_PORT={port}'"'"')' >> /tmp/parse_db_url.py
               echo '            print(f'"'"'DB_DATABASE={database}'"'"')' >> /tmp/parse_db_url.py
               echo '        else:' >> /tmp/parse_db_url.py
-              echo '            print('"'"'ERROR: Missing required components'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
-              echo '            print(f'"'"'ERROR: username={bool(username)}, host={bool(host)}, database={bool(database)}'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
+              echo '            print('"'"'ERROR: URL format not recognized'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
+              echo '            print(f'"'"'DEBUG: URL after removing scheme: {url[:100]}...'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
               echo '    except Exception as e:' >> /tmp/parse_db_url.py
               echo '        print(f'"'"'ERROR: {e}'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
               echo '        import traceback' >> /tmp/parse_db_url.py
