@@ -113,31 +113,46 @@ jobs:
             DB_DATABASE="${{ secrets.DB_DATABASE }}"
             SECRET_KEY="${{ secrets.DIFY_SECRET_KEY }}"
             
+            # Limpar variáveis antigas do banco de dados antes de adicionar novas
+            echo "Limpando variáveis antigas do banco de dados..."
+            sudo sed -i '/^DB_HOST=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+            sudo sed -i '/^DB_PORT=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+            sudo sed -i '/^DB_USERNAME=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+            sudo sed -i '/^DB_PASSWORD=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+            sudo sed -i '/^DB_DATABASE=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+            sudo sed -i '/^DATABASE_URL=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+            sudo sed -i '/^PGHOSTADDR=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+            
             # Configurar banco de dados (prioridade: DATABASE_URL > variáveis individuais)
             if [ -n "\$DATABASE_URL" ] && [ "\$DATABASE_URL" != "" ]; then
               echo "Configurando banco de dados usando DATABASE_URL..."
-              sudo sed -i 's|^DATABASE_URL=.*|DATABASE_URL='"\$DATABASE_URL"'|' "\$DIFY_DIR/.env" || echo "DATABASE_URL=\$DATABASE_URL" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              
+              # Adicionar DATABASE_URL
+              echo "DATABASE_URL=\$DATABASE_URL" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
               
               # Extrair componentes da URL para variáveis individuais
               echo 'import re' > /tmp/parse_db_url.py
               echo 'import sys' >> /tmp/parse_db_url.py
+              echo 'import urllib.parse' >> /tmp/parse_db_url.py
               echo 'url = sys.stdin.read().strip()' >> /tmp/parse_db_url.py
               echo 'if url:' >> /tmp/parse_db_url.py
-              echo '    pattern = r'"'"'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/([^?]+)'"'"'' >> /tmp/parse_db_url.py
-              echo '    match = re.match(pattern, url)' >> /tmp/parse_db_url.py
-              echo '    if match:' >> /tmp/parse_db_url.py
-              echo '        username = match.group(1)' >> /tmp/parse_db_url.py
-              echo '        password = match.group(2)' >> /tmp/parse_db_url.py
-              echo '        host = match.group(3)' >> /tmp/parse_db_url.py
-              echo '        port = match.group(4)' >> /tmp/parse_db_url.py
-              echo '        database = match.group(5)' >> /tmp/parse_db_url.py
-              echo '        print(f'"'"'DB_USERNAME={username}'"'"')' >> /tmp/parse_db_url.py
-              echo '        print(f'"'"'DB_PASSWORD={password}'"'"')' >> /tmp/parse_db_url.py
-              echo '        print(f'"'"'DB_HOST={host}'"'"')' >> /tmp/parse_db_url.py
-              echo '        print(f'"'"'DB_PORT={port}'"'"')' >> /tmp/parse_db_url.py
-              echo '        print(f'"'"'DB_DATABASE={database}'"'"')' >> /tmp/parse_db_url.py
-              echo '    else:' >> /tmp/parse_db_url.py
-              echo '        print('"'"'ERROR: URL format not recognized'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
+              echo '    try:' >> /tmp/parse_db_url.py
+              echo '        parsed = urllib.parse.urlparse(url)' >> /tmp/parse_db_url.py
+              echo '        username = parsed.username or ""' >> /tmp/parse_db_url.py
+              echo '        password = parsed.password or ""' >> /tmp/parse_db_url.py
+              echo '        host = parsed.hostname or ""' >> /tmp/parse_db_url.py
+              echo '        port = str(parsed.port) if parsed.port else "5432"' >> /tmp/parse_db_url.py
+              echo '        database = parsed.path.lstrip("/") if parsed.path else ""' >> /tmp/parse_db_url.py
+              echo '        if username and host and database:' >> /tmp/parse_db_url.py
+              echo '            print(f'"'"'DB_USERNAME={username}'"'"')' >> /tmp/parse_db_url.py
+              echo '            print(f'"'"'DB_PASSWORD={password}'"'"')' >> /tmp/parse_db_url.py
+              echo '            print(f'"'"'DB_HOST={host}'"'"')' >> /tmp/parse_db_url.py
+              echo '            print(f'"'"'DB_PORT={port}'"'"')' >> /tmp/parse_db_url.py
+              echo '            print(f'"'"'DB_DATABASE={database}'"'"')' >> /tmp/parse_db_url.py
+              echo '        else:' >> /tmp/parse_db_url.py
+              echo '            print('"'"'ERROR: Missing required components'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
+              echo '    except Exception as e:' >> /tmp/parse_db_url.py
+              echo '        print(f'"'"'ERROR: {e}'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
               
               printf '%s' "\$DATABASE_URL" | python3 /tmp/parse_db_url.py > /tmp/db_vars.txt 2>&1
               rm -f /tmp/parse_db_url.py
@@ -147,6 +162,7 @@ jobs:
                 cat /tmp/db_vars.txt | sed 's/\(DB_PASSWORD=\).*/\1***MASKED***/'
                 echo ""
                 
+                # Adicionar variáveis ao arquivo .env
                 while IFS='=' read -r KEY VALUE; do
                   [ -z "\$KEY" ] && continue
                   [ "\${KEY#\#}" != "\$KEY" ] && continue
@@ -154,50 +170,49 @@ jobs:
                   if [ -n "\$KEY" ] && [ -n "\$VALUE" ]; then
                     KEY=\$(echo "\$KEY" | xargs)
                     VALUE=\$(echo "\$VALUE" | xargs)
-                    ESCAPED_VALUE=\$(printf '%s' "\$VALUE" | sed 's/[[\.*^$()+?{|]/\\&/g')
-                    
-                    if grep -q "^\${KEY}=" "\$DIFY_DIR/.env" 2>/dev/null; then
-                      sudo sed -i "s|^\${KEY}=.*|\${KEY}=\${ESCAPED_VALUE}|" "\$DIFY_DIR/.env"
-                      echo "Atualizado: \${KEY}"
-                    else
-                      echo "\${KEY}=\${VALUE}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
-                      echo "Adicionado: \${KEY}"
-                    fi
+                    echo "\${KEY}=\${VALUE}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+                    echo "Adicionado: \${KEY}"
                   fi
                 done < /tmp/db_vars.txt
+                rm -f /tmp/db_vars.txt
+              else
+                echo "ERRO: Não foi possível extrair variáveis da DATABASE_URL"
+                cat /tmp/db_vars.txt 2>&1 || true
                 rm -f /tmp/db_vars.txt
               fi
             elif [ -n "\$DB_HOST" ] && [ "\$DB_HOST" != "" ]; then
               echo "Configurando banco de dados usando variáveis individuais..."
               
-              # Configurar variáveis individuais
-              [ -n "\$DB_HOST" ] && sudo sed -i "s|^DB_HOST=.*|DB_HOST=\$DB_HOST|" "\$DIFY_DIR/.env" || echo "DB_HOST=\$DB_HOST" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
-              [ -n "\$DB_PORT" ] && sudo sed -i "s|^DB_PORT=.*|DB_PORT=\${DB_PORT:-5432}|" "\$DIFY_DIR/.env" || echo "DB_PORT=\${DB_PORT:-5432}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
-              [ -n "\$DB_USERNAME" ] && sudo sed -i "s|^DB_USERNAME=.*|DB_USERNAME=\$DB_USERNAME|" "\$DIFY_DIR/.env" || echo "DB_USERNAME=\$DB_USERNAME" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
-              [ -n "\$DB_PASSWORD" ] && sudo sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=\$DB_PASSWORD|" "\$DIFY_DIR/.env" || echo "DB_PASSWORD=\$DB_PASSWORD" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
-              [ -n "\$DB_DATABASE" ] && sudo sed -i "s|^DB_DATABASE=.*|DB_DATABASE=\$DB_DATABASE|" "\$DIFY_DIR/.env" || echo "DB_DATABASE=\$DB_DATABASE" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              # Adicionar variáveis individuais
+              [ -n "\$DB_HOST" ] && echo "DB_HOST=\$DB_HOST" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              [ -n "\$DB_PORT" ] && echo "DB_PORT=\${DB_PORT:-5432}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              [ -n "\$DB_USERNAME" ] && echo "DB_USERNAME=\$DB_USERNAME" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              [ -n "\$DB_PASSWORD" ] && echo "DB_PASSWORD=\$DB_PASSWORD" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              [ -n "\$DB_DATABASE" ] && echo "DB_DATABASE=\$DB_DATABASE" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
               
-              # Construir DATABASE_URL se não existir
-              if ! grep -q "^DATABASE_URL=" "\$DIFY_DIR/.env" 2>/dev/null; then
-                DB_PORT_VALUE=\${DB_PORT:-5432}
-                DATABASE_URL_VALUE="postgresql://\${DB_USERNAME}:\${DB_PASSWORD}@\${DB_HOST}:\${DB_PORT_VALUE}/\${DB_DATABASE}"
-                echo "DATABASE_URL=\$DATABASE_URL_VALUE" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
-                echo "DATABASE_URL criada a partir das variáveis individuais"
-              fi
+              # Construir DATABASE_URL
+              DB_PORT_VALUE=\${DB_PORT:-5432}
+              DATABASE_URL_VALUE="postgresql://\${DB_USERNAME}:\${DB_PASSWORD}@\${DB_HOST}:\${DB_PORT_VALUE}/\${DB_DATABASE}"
+              echo "DATABASE_URL=\$DATABASE_URL_VALUE" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "DATABASE_URL criada a partir das variáveis individuais"
               
               echo "Variáveis de banco de dados configuradas"
             else
               echo "AVISO: Nenhuma configuração de banco de dados fornecida (DATABASE_URL ou variáveis DB_*)"
             fi
             
+            # Limpar e configurar SECRET_KEY
             if [ -n "\$SECRET_KEY" ] && [ "\$SECRET_KEY" != "" ]; then
-              sudo sed -i 's|^SECRET_KEY=.*|SECRET_KEY='"\$SECRET_KEY"'|' "\$DIFY_DIR/.env" || echo "SECRET_KEY=\$SECRET_KEY" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
-              sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
+              sudo sed -i '/^SECRET_KEY=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+              echo "SECRET_KEY=\$SECRET_KEY" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
             fi
             
-            # Configurar Redis local
-            sudo sed -i 's|^REDIS_HOST=.*|REDIS_HOST=localhost|' "\$DIFY_DIR/.env" || echo "REDIS_HOST=localhost" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
-            sudo sed -i 's|^REDIS_PORT=.*|REDIS_PORT=6379|' "\$DIFY_DIR/.env" || echo "REDIS_PORT=6379" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+            # Limpar e configurar Redis local
+            sudo sed -i '/^REDIS_HOST=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+            sudo sed -i '/^REDIS_PORT=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+            echo "REDIS_HOST=localhost" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+            echo "REDIS_PORT=6379" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+            
             sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
             
             # Copiar .env para docker/.env também (Docker Compose pode procurar lá)
@@ -319,11 +334,31 @@ jobs:
               echo "Variáveis DB_* no arquivo:"
               grep "^DB_" .env | sed 's/\(DB_PASSWORD=\).*/\1***MASKED***/' || echo "ERRO: Nenhuma variável DB_* encontrada!"
               
-              # Carregar variáveis do .env usando source
+              # Validar que não há valores duplicados/concatenados
+              if grep -q "DB_HOST=.*DB_HOST=" .env 2>/dev/null; then
+                echo "ERRO: Arquivo .env contém valores duplicados/concatenados!"
+                echo "Limpando e recriando a partir do arquivo principal..."
+                sudo cp "\$DIFY_DIR/.env" .env 2>/dev/null || true
+                sudo chown ubuntu:ubuntu .env
+              fi
+              
+              # Remover duplicatas de variáveis (manter apenas a primeira ocorrência)
+              for VAR in DB_HOST DB_PORT DB_USERNAME DB_PASSWORD DB_DATABASE DATABASE_URL; do
+                COUNT=\$(grep -c "^${VAR}=" .env 2>/dev/null || echo "0")
+                if [ "\$COUNT" -gt 1 ]; then
+                  echo "AVISO: Variável \${VAR} aparece \${COUNT} vezes. Removendo duplicatas..."
+                  FIRST_LINE=\$(grep -n "^${VAR}=" .env | head -1 | cut -d: -f1)
+                  sudo sed -i "\${FIRST_LINE}!{/^${VAR}=/d}" .env
+                fi
+              done
+              
+              # Carregar variáveis do .env usando source (com tratamento de erro)
               echo "Carregando variáveis do arquivo .env..."
+              set +e
               set -a
-              source .env
+              source .env 2>&1 | grep -v "syntax error" || true
               set +a
+              set -e
               
               echo "Variáveis de ambiente exportadas (verificando DB_*):"
               env | grep "^DB_" | sed 's/\(DB_PASSWORD=\).*/\1***MASKED***/' || echo "ERRO: Nenhuma variável DB_* encontrada no ambiente!"
