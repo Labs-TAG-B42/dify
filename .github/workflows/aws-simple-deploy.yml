@@ -243,29 +243,92 @@ jobs:
             echo "REDIS_HOST=redis" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
             echo "REDIS_PORT=6379" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
             
-            # Configurar banco para plugin_daemon
-            # Criar banco dify_plugin se não existir (usando psql na EC2)
+            # Configurar banco para plugin_daemon e habilitar pgvector
+            # Criar banco dify_plugin e habilitar extensões (usando psql na EC2)
             if [ -n "\$DATABASE_URL" ] && [ "\$DATABASE_URL" != "" ]; then
-              echo "Verificando/criando banco dify_plugin..."
+              echo "Configurando bancos de dados e extensões..."
               # Extrair componentes da URL usando sed
               DB_HOST=\$(echo "\$DATABASE_URL" | sed -n 's|.*@\([^:]*\):.*|\1|p')
               DB_PORT=\$(echo "\$DATABASE_URL" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
               DB_USER=\$(echo "\$DATABASE_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
               DB_PASS=\$(echo "\$DATABASE_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+              DB_NAME=\$(echo "\$DATABASE_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
               
               # Verificar se banco existe, se não, criar usando psql
               if command -v psql > /dev/null 2>&1; then
+                # Criar banco dify_plugin se não existir
+                echo "Verificando/criando banco dify_plugin..."
                 PGPASSWORD="\$DB_PASS" psql -h "\$DB_HOST" -p "\${DB_PORT:-5432}" -U "\$DB_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='dify_plugin'" | grep -q 1 || \
                   PGPASSWORD="\$DB_PASS" psql -h "\$DB_HOST" -p "\${DB_PORT:-5432}" -U "\$DB_USER" -d postgres -c "CREATE DATABASE dify_plugin" 2>/dev/null && \
                   echo "Banco dify_plugin criado" || echo "Banco dify_plugin já existe ou erro ao criar"
+                
+                # Habilitar extensão pgvector no banco principal (dify)
+                echo "Habilitando extensão pgvector no banco \$DB_NAME..."
+                PGPASSWORD="\$DB_PASS" psql -h "\$DB_HOST" -p "\${DB_PORT:-5432}" -U "\$DB_USER" -d "\$DB_NAME" -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null && \
+                  echo "Extensão pgvector habilitada no banco \$DB_NAME" || \
+                  echo "AVISO: Não foi possível habilitar pgvector (pode já estar habilitada ou não estar disponível)"
+                
+                # Habilitar extensão pgvector no banco dify_plugin também
+                echo "Habilitando extensão pgvector no banco dify_plugin..."
+                PGPASSWORD="\$DB_PASS" psql -h "\$DB_HOST" -p "\${DB_PORT:-5432}" -U "\$DB_USER" -d dify_plugin -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null && \
+                  echo "Extensão pgvector habilitada no banco dify_plugin" || \
+                  echo "AVISO: Não foi possível habilitar pgvector no dify_plugin"
               else
-                echo "AVISO: psql não está disponível, banco dify_plugin deve ser criado manualmente"
+                echo "AVISO: psql não está disponível, bancos e extensões devem ser configurados manualmente"
               fi
             fi
             
             # Configurar variáveis do plugin_daemon
             sudo sed -i '/^DB_PLUGIN_DATABASE=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
             echo "DB_PLUGIN_DATABASE=dify_plugin" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+            
+            # Configurar pgvector como banco vetorial
+            # Definir VECTOR_STORE explicitamente como pgvector
+            sudo sed -i '/^VECTOR_STORE=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+            echo "VECTOR_STORE=pgvector" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+            
+            # Configurar variáveis PGVECTOR_* para apontar para o RDS (mesmo banco principal)
+            # Extrair valores do banco principal se não estiverem definidos
+            if [ -n "\$DATABASE_URL" ] && [ "\$DATABASE_URL" != "" ]; then
+              # Usar valores já extraídos anteriormente ou extrair novamente
+              if [ -z "\$DB_HOST" ]; then
+                DB_HOST=\$(echo "\$DATABASE_URL" | sed -n 's|.*@\([^:]*\):.*|\1|p')
+                DB_PORT=\$(echo "\$DATABASE_URL" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
+                DB_USER=\$(echo "\$DATABASE_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
+                DB_PASS=\$(echo "\$DATABASE_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+                DB_NAME=\$(echo "\$DATABASE_URL" | sed -n 's|.*/\([^?]*\).*|\1|p')
+              fi
+              
+              # Configurar PGVECTOR_* apontando para o RDS (mesmo banco principal)
+              sudo sed -i '/^PGVECTOR_HOST=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+              sudo sed -i '/^PGVECTOR_PORT=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+              sudo sed -i '/^PGVECTOR_USER=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+              sudo sed -i '/^PGVECTOR_PASSWORD=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+              sudo sed -i '/^PGVECTOR_DATABASE=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+              
+              echo "PGVECTOR_HOST=\${DB_HOST}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "PGVECTOR_PORT=\${DB_PORT:-5432}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "PGVECTOR_USER=\${DB_USER}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "PGVECTOR_PASSWORD=\${DB_PASS}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "PGVECTOR_DATABASE=\${DB_NAME}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "PGVECTOR_PG_BIGM=false" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "Variáveis PGVECTOR_* configuradas para apontar para o RDS"
+            elif [ -n "\$DB_HOST" ] && [ "\$DB_HOST" != "" ]; then
+              # Usar variáveis individuais se DATABASE_URL não estiver disponível
+              sudo sed -i '/^PGVECTOR_HOST=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+              sudo sed -i '/^PGVECTOR_PORT=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+              sudo sed -i '/^PGVECTOR_USER=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+              sudo sed -i '/^PGVECTOR_PASSWORD=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+              sudo sed -i '/^PGVECTOR_DATABASE=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+              
+              echo "PGVECTOR_HOST=\${DB_HOST}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "PGVECTOR_PORT=\${DB_PORT:-5432}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "PGVECTOR_USER=\${DB_USERNAME}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "PGVECTOR_PASSWORD=\${DB_PASSWORD}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "PGVECTOR_DATABASE=\${DB_DATABASE}" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "PGVECTOR_PG_BIGM=false" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+              echo "Variáveis PGVECTOR_* configuradas para apontar para o RDS"
+            fi
             
             sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
             
@@ -298,8 +361,21 @@ jobs:
               # Descomentar plugin_daemon se estiver comentado
               sudo sed -i 's/^[[:space:]]*# plugin_daemon:/  plugin_daemon:/' docker/docker-compose.yaml || true
               sudo sed -i '/^[[:space:]]*# plugin_daemon:/,/^[[:space:]]*[a-z_]*:/ { s/^[[:space:]]*# /  / }' docker/docker-compose.yaml || true
+              
+              # Configurar VECTOR_STORE para usar pgvector explicitamente
+              # Substituir qualquer valor padrão de VECTOR_STORE por pgvector
+              sudo sed -i 's/VECTOR_STORE: \${VECTOR_STORE:-[^}]*}/VECTOR_STORE: pgvector/' docker/docker-compose.yaml || true
+              sudo sed -i 's/VECTOR_STORE: \${VECTOR_STORE}/VECTOR_STORE: pgvector/' docker/docker-compose.yaml || true
+              # Garantir que api e worker têm VECTOR_STORE configurado
+              sudo sed -i '/^[[:space:]]*api:/,/^[[:space:]]*[a-z_]*:/ { /VECTOR_STORE:/! { /environment:/a\
+            - VECTOR_STORE=pgvector
+          } }' docker/docker-compose.yaml || true
+              sudo sed -i '/^[[:space:]]*worker:/,/^[[:space:]]*[a-z_]*:/ { /VECTOR_STORE:/! { /environment:/a\
+            - VECTOR_STORE=pgvector
+          } }' docker/docker-compose.yaml || true
+              
               sudo chown ubuntu:ubuntu docker/docker-compose.yaml
-              echo "Plugin daemon verificado no docker-compose.yaml"
+              echo "Plugin daemon e pgvector configurados no docker-compose.yaml"
             fi
             
             # Garantir permissões corretas nos diretórios de storage
