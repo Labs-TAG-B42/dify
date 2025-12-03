@@ -131,18 +131,23 @@ jobs:
               echo "DATABASE_URL=\$DATABASE_URL" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
               
               # Extrair componentes da URL para variáveis individuais
+              # Usar método mais robusto que lida com caracteres especiais na senha
               echo 'import re' > /tmp/parse_db_url.py
               echo 'import sys' >> /tmp/parse_db_url.py
               echo 'import urllib.parse' >> /tmp/parse_db_url.py
               echo 'url = sys.stdin.read().strip()' >> /tmp/parse_db_url.py
               echo 'if url:' >> /tmp/parse_db_url.py
               echo '    try:' >> /tmp/parse_db_url.py
+              echo '        # Usar urlparse que lida melhor com caracteres especiais' >> /tmp/parse_db_url.py
               echo '        parsed = urllib.parse.urlparse(url)' >> /tmp/parse_db_url.py
-              echo '        username = parsed.username or ""' >> /tmp/parse_db_url.py
-              echo '        password = parsed.password or ""' >> /tmp/parse_db_url.py
+              echo '        username = urllib.parse.unquote(parsed.username or "")' >> /tmp/parse_db_url.py
+              echo '        password = urllib.parse.unquote(parsed.password or "")' >> /tmp/parse_db_url.py
               echo '        host = parsed.hostname or ""' >> /tmp/parse_db_url.py
               echo '        port = str(parsed.port) if parsed.port else "5432"' >> /tmp/parse_db_url.py
-              echo '        database = parsed.path.lstrip("/") if parsed.path else ""' >> /tmp/parse_db_url.py
+              echo '        database = parsed.path.lstrip("/").split("?")[0].split("#")[0] if parsed.path else ""' >> /tmp/parse_db_url.py
+              echo '        # Debug: mostrar o que foi extraído' >> /tmp/parse_db_url.py
+              echo '        print(f'"'"'DEBUG: parsed.scheme={parsed.scheme}, parsed.netloc={parsed.netloc}, parsed.path={parsed.path}'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
+              echo '        print(f'"'"'DEBUG: username={username}, host={host}, database={database}, port={port}'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
               echo '        if username and host and database:' >> /tmp/parse_db_url.py
               echo '            print(f'"'"'DB_USERNAME={username}'"'"')' >> /tmp/parse_db_url.py
               echo '            print(f'"'"'DB_PASSWORD={password}'"'"')' >> /tmp/parse_db_url.py
@@ -151,11 +156,21 @@ jobs:
               echo '            print(f'"'"'DB_DATABASE={database}'"'"')' >> /tmp/parse_db_url.py
               echo '        else:' >> /tmp/parse_db_url.py
               echo '            print('"'"'ERROR: Missing required components'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
+              echo '            print(f'"'"'ERROR: username={bool(username)}, host={bool(host)}, database={bool(database)}'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
               echo '    except Exception as e:' >> /tmp/parse_db_url.py
               echo '        print(f'"'"'ERROR: {e}'"'"', file=sys.stderr)' >> /tmp/parse_db_url.py
+              echo '        import traceback' >> /tmp/parse_db_url.py
+              echo '        traceback.print_exc(file=sys.stderr)' >> /tmp/parse_db_url.py
               
-              printf '%s' "\$DATABASE_URL" | python3 /tmp/parse_db_url.py > /tmp/db_vars.txt 2>&1
-              rm -f /tmp/parse_db_url.py
+              echo "DEBUG: Tentando parsear DATABASE_URL..."
+              printf '%s' "\$DATABASE_URL" | python3 /tmp/parse_db_url.py > /tmp/db_vars.txt 2>/tmp/db_vars_error.txt
+              ERROR_OUTPUT=\$(cat /tmp/db_vars_error.txt 2>/dev/null || echo "")
+              rm -f /tmp/parse_db_url.py /tmp/db_vars_error.txt
+              
+              if [ -n "\$ERROR_OUTPUT" ]; then
+                echo "DEBUG: Erros do parser:"
+                echo "\$ERROR_OUTPUT"
+              fi
               
               if [ -f /tmp/db_vars.txt ] && [ -s /tmp/db_vars.txt ] && ! grep -q "ERROR" /tmp/db_vars.txt; then
                 echo "Variáveis extraídas do DATABASE_URL:"
@@ -176,8 +191,14 @@ jobs:
                 done < /tmp/db_vars.txt
                 rm -f /tmp/db_vars.txt
               else
-                echo "ERRO: Não foi possível extrair variáveis da DATABASE_URL"
-                cat /tmp/db_vars.txt 2>&1 || true
+                echo "AVISO: Não foi possível extrair variáveis individuais da DATABASE_URL"
+                echo "Conteúdo do arquivo temporário:"
+                cat /tmp/db_vars.txt 2>&1 || echo "Arquivo vazio ou não existe"
+                echo ""
+                echo "Usando apenas DATABASE_URL (o Dify pode funcionar apenas com DATABASE_URL)"
+                echo "A DATABASE_URL já foi adicionada ao arquivo .env"
+                # As variáveis individuais são opcionais se DATABASE_URL estiver configurada
+                # O Dify pode usar DATABASE_URL diretamente
                 rm -f /tmp/db_vars.txt
               fi
             elif [ -n "\$DB_HOST" ] && [ "\$DB_HOST" != "" ]; then
