@@ -89,6 +89,13 @@ jobs:
             
             cd "\$DIFY_DIR"
             echo "Versão atual: \$(sudo -u ubuntu git rev-parse --short HEAD)"
+            
+            # Garantir permissões corretas nos diretórios de storage
+            # O container roda como usuário dify (uid=1001, gid=1001)
+            echo "Configurando permissões dos diretórios de storage..."
+            sudo mkdir -p "\$DIFY_DIR/docker/volumes/app/storage"
+            sudo chown -R 1001:1001 "\$DIFY_DIR/docker/volumes/app/storage"
+            sudo chmod -R 755 "\$DIFY_DIR/docker/volumes/app/storage"
           EOF
 
       - name: Update Environment File
@@ -230,11 +237,35 @@ jobs:
               echo "SECRET_KEY=\$SECRET_KEY" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
             fi
             
-            # Limpar e configurar Redis local
+            # Limpar e configurar Redis (usar nome do serviço Docker Compose)
             sudo sed -i '/^REDIS_HOST=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
             sudo sed -i '/^REDIS_PORT=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
-            echo "REDIS_HOST=localhost" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+            echo "REDIS_HOST=redis" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
             echo "REDIS_PORT=6379" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
+            
+            # Configurar banco para plugin_daemon
+            # Criar banco dify_plugin se não existir (usando psql na EC2)
+            if [ -n "\$DATABASE_URL" ] && [ "\$DATABASE_URL" != "" ]; then
+              echo "Verificando/criando banco dify_plugin..."
+              # Extrair componentes da URL usando sed
+              DB_HOST=\$(echo "\$DATABASE_URL" | sed -n 's|.*@\([^:]*\):.*|\1|p')
+              DB_PORT=\$(echo "\$DATABASE_URL" | sed -n 's|.*:\([0-9]*\)/.*|\1|p')
+              DB_USER=\$(echo "\$DATABASE_URL" | sed -n 's|.*://\([^:]*\):.*|\1|p')
+              DB_PASS=\$(echo "\$DATABASE_URL" | sed -n 's|.*://[^:]*:\([^@]*\)@.*|\1|p')
+              
+              # Verificar se banco existe, se não, criar usando psql
+              if command -v psql > /dev/null 2>&1; then
+                PGPASSWORD="\$DB_PASS" psql -h "\$DB_HOST" -p "\${DB_PORT:-5432}" -U "\$DB_USER" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='dify_plugin'" | grep -q 1 || \
+                  PGPASSWORD="\$DB_PASS" psql -h "\$DB_HOST" -p "\${DB_PORT:-5432}" -U "\$DB_USER" -d postgres -c "CREATE DATABASE dify_plugin" 2>/dev/null && \
+                  echo "Banco dify_plugin criado" || echo "Banco dify_plugin já existe ou erro ao criar"
+              else
+                echo "AVISO: psql não está disponível, banco dify_plugin deve ser criado manualmente"
+              fi
+            fi
+            
+            # Configurar variáveis do plugin_daemon
+            sudo sed -i '/^DB_PLUGIN_DATABASE=/d' "\$DIFY_DIR/.env" 2>/dev/null || true
+            echo "DB_PLUGIN_DATABASE=dify_plugin" | sudo tee -a "\$DIFY_DIR/.env" > /dev/null
             
             sudo chown ubuntu:ubuntu "\$DIFY_DIR/.env"
             
@@ -261,12 +292,21 @@ jobs:
               sudo chown ubuntu:ubuntu docker/docker-compose.yaml
             fi
             
-            # Remover bloco plugin_daemon do nginx (container está com problemas de IPv6)
-            if [ -f "docker/nginx/conf.d/default.conf.template" ]; then
-              sudo sed -i '/location \/e\//,/^[[:space:]]*}/d' docker/nginx/conf.d/default.conf.template || true
-              sudo chown ubuntu:ubuntu docker/nginx/conf.d/default.conf.template
-              echo "Bloco plugin_daemon removido do template nginx"
+            # Garantir que plugin_daemon está habilitado (não comentado)
+            # O plugin_daemon agora está configurado com RDS que permite conexões sem SSL
+            if [ -f "docker/docker-compose.yaml" ]; then
+              # Descomentar plugin_daemon se estiver comentado
+              sudo sed -i 's/^[[:space:]]*# plugin_daemon:/  plugin_daemon:/' docker/docker-compose.yaml || true
+              sudo sed -i '/^[[:space:]]*# plugin_daemon:/,/^[[:space:]]*[a-z_]*:/ { s/^[[:space:]]*# /  / }' docker/docker-compose.yaml || true
+              sudo chown ubuntu:ubuntu docker/docker-compose.yaml
+              echo "Plugin daemon verificado no docker-compose.yaml"
             fi
+            
+            # Garantir permissões corretas nos diretórios de storage
+            echo "Configurando permissões dos diretórios de storage..."
+            sudo mkdir -p "docker/volumes/app/storage"
+            sudo chown -R 1001:1001 "docker/volumes/app/storage"
+            sudo chmod -R 755 "docker/volumes/app/storage"
             
             echo "Docker Compose atualizado"
           EOF
@@ -290,6 +330,12 @@ jobs:
               sudo cp "\$DIFY_DIR/.env" "\$DIFY_DIR/docker/.env" 2>/dev/null || true
               sudo chown ubuntu:ubuntu "\$DIFY_DIR/docker/.env" 2>/dev/null || true
             fi
+            
+            # Garantir permissões corretas nos diretórios de storage antes de iniciar containers
+            echo "Verificando permissões dos diretórios de storage..."
+            sudo mkdir -p "\$DIFY_DIR/docker/volumes/app/storage"
+            sudo chown -R 1001:1001 "\$DIFY_DIR/docker/volumes/app/storage"
+            sudo chmod -R 755 "\$DIFY_DIR/docker/volumes/app/storage"
             
             echo "Fazendo pull das imagens Docker..."
             # Executar do diretório docker/ para que o .env seja encontrado automaticamente
